@@ -13,12 +13,18 @@ samtools view -@ 40 -q 20 -S -b PATH_TO_OUTPUT/SAMPLENAME1.sorted.sam > PATH_TO_
 samtools sort -@ 40 PATH_TO_OUTPUT/SAMPLENAME1.bam -o PATH_TO_OUTPUT/SAMPLENAME1.sorted.bam
 
 
+### mark and remove dupliactes
+picard MarkDuplicates INPUT=PATH_TO_OUTPUT/SAMPLENAME1.sorted.bam OUTPUT=PATH_TO_OUTPUT/SAMPLENAME1.dedup.bam METRICS_FILE=PATH_TO_OUTPUT/SAMPLENAME1.metrics.txt REMOVE_DUPLICATES=true VALIDATION_STRINGENCY=SILENT
+### re-index
+samtools index PATH_TO_OUTPUT/SAMPLENAME1.dedup.bam
+
+
 ### converting bam to mpileup 
 ### create different files as needed -- samples to include should follow one after another
 ### these files will be used as input in npstat 
 ### they will also be converted to sync files for other downstream analyses (see below)
 ### do for all chrs
-samtools mpileup -r Chr1 -f PATH_TO_REF_FASTA PATH_TO_OUTPUT/SAMPLENAME1.sorted.bam PATH_TO_OUTPUT/SAMPLENAME2.sorted.bam PATH_TO_OUTPUT/SAMPLENAME3.sorted.bam PATH_TO_OUTPUT/SAMPLENAMEn.sorted.bam > allPops.chr1.mpileup
+samtools mpileup -r Chr1 -f PATH_TO_REF_FASTA PATH_TO_OUTPUT/SAMPLENAME1.dedup.bam PATH_TO_OUTPUT/SAMPLENAME2.dedup.bam PATH_TO_OUTPUT/SAMPLENAME3.dedup.bam PATH_TO_OUTPUT/SAMPLENAMEn.dedup.bam > allPops.chr1.mpileup
 
 
 ### converting mpileup to sync 
