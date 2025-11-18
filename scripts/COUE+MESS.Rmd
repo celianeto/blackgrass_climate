@@ -1,0 +1,1564 @@
+---
+title: "**Climate-driven niche stability and genomic resilience in a major agricultural weed over 200 years**"
+output: 
+  html_document:
+    self_contained: false
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE, cache=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Preparation, echo=FALSE, include=FALSE}
+
+#*0. Preparation**
+
+#Libraries loading + plot functions tweaking + colours and themes
+
+
+# Load libraries for all following scripts
+library(ggplot2)
+library(ggpubr)
+library(ggpmisc)
+library(maps)
+library(plyr)
+library(ecospat)
+#library(rgeos)
+library(sf)  
+#library(maptools)
+data(wrld_simpl)
+library(raster)
+library(biomod2)
+library(dplyr)
+library(dismo)
+library(maxnet)
+#library(rgdal)
+library(scales)
+#library(geosphere)
+library(scales)
+library(usdm) 
+library(devtools)
+library(ade4)
+library(geodata)
+library(modEvA)
+library(RColorBrewer)
+library(viridis)
+library(corrplot)
+library(omnibus)
+library(vegan)
+
+
+# spatial extent for plotting
+extEU <- extent(-10,50,30,70) # Europe ~ expansion range
+extME <- extent(20,50,30,47) # Middle East ~ native range
+
+
+figmtn = c("#D46F10", "#E29244", "#FFAA00", "#4CA49E", "#69B9FA", "#59A3F8", "#4B8FF7")
+conifer <- c("#CC7540", "#B36A40", "#9A5F41", "#825542", "#7C5947", "#899362", "#6E8551", "#537740", "#39692F" )
+
+
+### colours
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+
+my.plot.contrib <- function(contrib, eigen) {
+  if (ncol(contrib) == 1) {
+    h <- c(unlist(contrib))
+    n <- row.names(contrib)
+    barplot(h, space = 0, names.arg = n)
+    # No title
+  }
+  
+  if (ncol(contrib) == 2) {
+    contrib_scaled <- contrib[, 1:2] / max(abs(contrib[, 1:2]))
+
+    # Set up blank plot
+    plot(contrib_scaled, type = "n", asp = 1,
+         xlab = paste0("Axis 1 (", round(eigen[1] / sum(eigen) * 100, 2), "%)"),
+         ylab = paste0("Axis 2 (", round(eigen[2] / sum(eigen) * 100, 2), "%)"),
+         xlim = c(-1.1, 1.1), ylim = c(-1.1, 1.1))
+
+    abline(h = 0, v = 0, col = "gray", lty = 2)
+
+    # Draw arrows and labels
+    apply(contrib_scaled, 1, function(row) {
+      arrows(0, 0, row[1], row[2], length = 0.1, col = "black")
+      text(row[1], row[2], labels = rownames(contrib_scaled)[which(apply(contrib_scaled, 1, identical, row))],
+           pos = 4, cex = 0.8)  # pos = 4 means label to the right
+    })
+  }
+}
+
+
+
+```
+
+
+# 1. Have environmental changes affected blackgrass niche? 
+
+## 1.1. Climate data
+
+Get climate data from BioClim for past and present. Past is between 1901 and 1921, and present between 2000 and 2021.
+Only maximum and minimum temperature and precipitation were downloaded, all variables were calculated from those.
+
+- **BIO1** - Annual Mean Temperature
+- **BIO2** - Mean Diurnal Range (Mean of monthly (max temp - min temp))
+- **BIO3** - Isothermality (BIO2/BIO7) (×100)
+- **BIO4** - Temperature Seasonality (standard deviation ×100)
+- **BIO5** - Max Temperature of Warmest Month
+- **BIO6** - Min Temperature of Coldest Month
+- **BIO7** - Temperature Annual Range (BIO5-BIO6)
+- **BIO8** - Mean Temperature of Wettest Quarter
+- **BIO9** - Mean Temperature of Driest Quarter
+- **BIO10** - Mean Temperature of Warmest Quarter
+- **BIO11** - Mean Temperature of Coldest Quarter
+- **BIO12** - Annual Precipitation
+- **BIO13** - Precipitation of Wettest Month
+- **BIO14** - Precipitation of Driest Month
+- **BIO15** - Precipitation Seasonality (Coefficient of Variation)
+- **BIO16** - Precipitation of Wettest Quarter
+- **BIO17** - Precipitation of Driest Quarter
+- **BIO18** - Precipitation of Warmest Quarter
+- **BIO19** - Precipitation of Coldest Quarter
+
+
+```{r load climate data, echo=FALSE, message=FALSE}
+
+# load the variable
+tmn <- brick("/Volumes/kqw596/From_SCIENCE/CRU/tmn.nc", varname = "tmn")
+pre <- brick("/Volumes/kqw596/From_SCIENCE/CRU/pre.nc", varname = "pre")
+tmx <- brick("/Volumes/kqw596/From_SCIENCE/CRU/tmx.nc", varname = "tmx")
+
+# raster with past data
+tmn_past <- subset(tmn, 1:240)
+pre_past <- subset(pre, 1:240)
+tmx_past <- subset(tmx, 1:240)
+
+
+# mean per month
+grp = substr(names(tmn_past), 7,8)
+tmn_past_mean = stackApply(tmn_past, grp, mean)
+pre_past_mean = stackApply(pre_past, grp, mean)
+tmx_past_mean = stackApply(tmx_past, grp, mean)
+
+
+# raster with recent data
+tmn_recent <- subset(tmn, 1189:1452)
+pre_recent <- subset(pre, 1189:1452)
+tmx_recent <- subset(tmx, 1189:1452)
+
+# mean per month
+grp = substr(names(tmn_recent), 7,8)
+tmn_recent_mean = stackApply(tmn_recent, grp, mean)
+pre_recent_mean = stackApply(pre_recent, grp, mean)
+tmx_recent_mean = stackApply(tmx_recent, grp, mean)
+
+
+library(dismo)
+## calculate bioclim variables from prec, tmn and tmax for past and present 
+biovars_recent <- biovars(prec = pre_recent_mean, tmin = tmn_recent_mean, tmax = tmx_recent_mean)
+biovars_recent <- crop(biovars_recent, extEU)
+
+biovars_past <- biovars(prec = pre_past_mean, tmin = tmn_past_mean, tmax = tmx_past_mean)
+biovars_past <- crop(biovars_past, extEU)
+
+```
+
+
+**Past climate**
+
+
+```{r plot past climate, echo=FALSE}
+plot(biovars_past)
+```
+
+
+**Present climate**
+
+
+```{r plot recent climate, echo=FALSE}
+plot(biovars_recent)
+
+```
+
+
+## 1.2. Edaphic data
+
+Get soil data from geodata. Data for 30-60 cm at one timepoint (XXI century).
+Added also cropland. 
+
+- **bdod** - Bulk density of the fine earth fraction	(kg dm-3)
+- **nitrogen** - Total nitrogen (N)	(g kg-1)
+- **phh2o** - pH
+- **sand** - Sand (> 0.05 mm) in fine earth	(%)
+- **silt** - Silt (0.002-0.05 mm) in fine earth	(%)
+- **clay**	Clay (< 0.002 mm) in fine earth	(%)
+- **cfvo** - Vol. fraction of coarse fragments (> 2 mm) (%)
+ - **ocd** - Organic carbon density	(kg m-3)
+- **cropland** - fraction cropland in each cell
+
+
+```{r load edaphic data, echo=FALSE}
+# download data
+#nitro <- soil_world("nitrogen", path = "./", depth = 30)
+#bd <- soil_world("bdod", path = "./", depth = 30)
+#cf <- soil_world("cfvo", path = "./", depth = 30)
+#clay <- soil_world("clay", path = "./", depth = 30)
+#ocd <- soil_world("ocd", path = "./", depth = 30)
+#ocs <- soil_world("ocs", path = "./", depth = 30)
+#ph <- soil_world("phh2o", path = "./", depth = 30)
+#sand <- soil_world("sand", path = "./", depth = 30)
+#silt <- soil_world("silt", path = "./", depth = 30)
+#soc <- soil_world("soc", path = "./", depth = 30)
+#wrb <- soil_world("wrb", path = "./", depth = 30)
+
+# load raster
+nitro <- raster("../../modelling/soil_geodata/nitrogen_15-30cm_mean_30s.tif")
+bd <- raster("../../modelling/soil_geodata/bdod_15-30cm_mean_30s.tif")
+#cf <- raster("./modelling/soil_geodata/cfvo_15-30cm_mean_30s.tif")
+clay <- raster("../../modelling/soil_geodata/clay_15-30cm_mean_30s.tif")
+#ocd <- raster("./modelling/soil_geodata/ocd_15-30cm_mean_30s.tif")
+ph <- raster("../../modelling/soil_geodata/phh2o_15-30cm_mean_30s.tif")
+sand <- raster("../../modelling/soil_geodata/sand_15-30cm_mean_30s.tif")
+silt <- raster("../../modelling/soil_geodata/silt_15-30cm_mean_30s.tif")
+#soc <- raster("./modelling/soil_geodata/soc_15-30cm_mean_30s.tif")
+land <- raster("../WorldCover_cropland_30s.tif")
+
+# get same resolution as climate
+soil <- stack(nitro, bd, clay, ph, sand, silt)
+soil <- crop(soil, extEU)
+soil <- terra::aggregate(soil, fact=60, fun='mean')
+
+land <- crop(land, extEU)
+land <- terra::aggregate(land, fact=60, fun='mean')
+
+# final stack with climate + soil
+final_recent <- stack(biovars_recent, soil, land)#, cld_recent_mean, dtr_recent_mean, pet_recent_mean, frs_recent_mean, vap_recent_mean, wet_recent_mean)
+final_past <- stack(biovars_past, soil, land)#, cld_past_mean, dtr_past_mean, pet_past_mean, frs_past_mean, vap_past_mean, wet_past_mean)
+
+diff <- brick(final_recent) - brick(final_past)
+
+plot(soil)
+#plot(land)
+
+## pops of interest
+pops = read.table("../popsall.txt", header = TRUE)
+popsCoord = pops[, c(1, 4,5)]
+#popsCoord = popsCoord[popsCoord$Pop %in% colnames(fst),]
+popsCoord = na.omit(popsCoord)
+coordinates(popsCoord) = ~ Long + Lat 
+present = extract(final_recent, popsCoord)
+present = as.data.frame(present)
+past = extract(final_past, popsCoord)
+diffcoord = extract(diff, popsCoord)
+
+```
+
+
+### 1.3.1. Selection of present-day non-colinear variables 
+
+```{r selection of variables, echo=FALSE, message=FALSE, warning=FALSE}
+
+vi <- vifcor(na.omit(as.data.frame(rasterToPoints(final_recent))[, -c(1,2)]), th = 0.5, method = "spearman")
+vi
+
+```
+
+
+## 1.5. Species occurrence data across time
+
+Occurrence data come from GBIF and are split into past -- before 1920 -- and recent -- from 2000 to 2020.
+
+*Because there could be an excess of representation, locations were thinned to keep only one occurrence in a 0.25-coordinates rounded radius and env data is a mean of the surrounding 4 cells per occurrence location.*
+
+```{r load data: climate and occurrences, echo=FALSE, message=FALSE}
+
+#######
+####### ORGANIZE DATA
+#######
+
+# crop the environmental data to the native and invasive geographical ranges
+eurEnvR <- crop(final_recent, extEU)
+midEnvR <- crop(final_past, extEU)
+
+eurEnvM <- getValues(eurEnvR)
+midEnvM <- getValues(midEnvR)
+
+# remove missing values
+eurEnvM <- eurEnvM[complete.cases(eurEnvM), ]
+midEnvM <- midEnvM[complete.cases(midEnvM), ]
+
+# produce global environmental background data
+globalEnvM <- rbind(eurEnvM, midEnvM)
+
+library(plyr)
+# species occurrence data
+## past 
+past.occ.original <- read.table("/Volumes/kqw596/From_SCIENCE/modelling/pastOccurencesAndClimate.txt", header=T)
+past.occ.original <- past.occ.original[, c(1,2,20,21)]
+##### because there could be an excess of representation, I thinned the set to keep one individual only in a 0.25 rounded coordinates radius
+past.occ.thin <- past.occ.original
+past.occ.thin$Longitude <- round_any(past.occ.thin$Longitude, 0.5, f = ceiling)
+past.occ.thin$Latitude <- round_any(past.occ.thin$Latitude, 0.5, f = ceiling)
+past.occ.thin <- dplyr::summarise(past.occ.thin, across(everything(), mean), .by = c(Longitude, Latitude, countryCode))
+#dim(past.occ.original)
+#dim(past.occ.thin)
+# europe only
+past.occ.thin <- past.occ.thin[past.occ.thin$Longitude > -10 & past.occ.thin$Longitude < 50 & past.occ.thin$Latitude > 30 & past.occ.thin$Latitude < 70,]
+# dates
+past.occ.thin <- past.occ.thin[past.occ.thin$year < 1922,]
+
+
+## present
+# Present climate data with all occurrences
+present.occ.original <- read.table("/Volumes/kqw596/From_SCIENCE/modelling/presentOccurencesAndClimate.txt", header=T) 
+present.occ.original <- present.occ.original[, c(1,2,20,21)]
+##### because there could be an excess of representation in the present set, I thinned the set to keep one individual only in a 0.25 rounded coordinates radius
+present.occ.thin <- present.occ.original
+present.occ.thin$Longitude <- round_any(present.occ.thin$Longitude, 0.5, f = ceiling)
+present.occ.thin$Latitude <- round_any(present.occ.thin$Latitude, 0.5, f = ceiling)
+present.occ.thin <- dplyr::summarise(present.occ.thin, across(everything(), mean), .by = c(Longitude, Latitude, countryCode))
+#dim(present.occ.original)
+#dim(present.occ.thin)
+present.occ.thin <- present.occ.thin[present.occ.thin$Longitude > -10 & present.occ.thin$Longitude < 50 & present.occ.thin$Latitude > 30 & present.occ.thin$Latitude < 70,]
+# dates
+present.occ.thin <- present.occ.thin[present.occ.thin$year > 1999,]
+
+
+# dataframe with all variables past for native occurrences 
+past.occ.thin.coord <- past.occ.thin
+coordinates(past.occ.thin.coord) = ~ Longitude + Latitude
+rasValue_past=raster::extract(final_past, past.occ.thin.coord, method = "bilinear") # with bilinear method, I take mean across the closest 4 cells; to compensate for lower number of occurences
+final_past.df <- cbind(past.occ.thin[, c("Longitude", "Latitude")], rasValue_past)
+
+# dataframe with all variables present for invasive occurrences 
+present.occ.thin.coord <- present.occ.thin
+coordinates(present.occ.thin.coord)= ~ Longitude+ Latitude
+rasValue_recent=raster::extract(final_recent, present.occ.thin.coord, method = "bilinear")
+final_recent.df <- cbind(present.occ.thin[, c("Longitude", "Latitude")], rasValue_recent)
+
+
+```
+
+
+
+**Past occurrences:**
+
+```{r past occurrences, echo=FALSE, message=FALSE, warning=FALSE, dev="png"}
+world_map <- map_data("world")
+europe_map <- world_map[world_map$long > -10 & world_map$long < 50 & world_map$lat > 30 & world_map$lat < 70,]
+
+map <- ggplot() + 
+  geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="grey90", fill="grey90" ) + theme_bw() +
+  geom_point(data = past.occ.thin, aes(x = Longitude, y = Latitude), colour = "#D46F10") +
+  xlab("Longitude") + ylab("Latitude")
+
+map_past <- ggExtra::ggMarginal(map, type = "histogram", fill = "#D46F10", colour = NA)
+
+histo_past <- ggplot(past.occ.thin, aes(x = year)) + geom_histogram() + theme_bw() +
+  xlab("")
+
+ggarrange(plotlist = list(map_past, ggarrange(plotlist = list(histo_past, NA), widths = c(1, 0.17), ncol = 2)), heights = c(2,1), ncol = 1, labels = c("a", NA))
+
+#dim(past.occ.thin)
+
+```
+
+**Present occurrences:**
+
+```{r present occurrences, echo=FALSE, message=FALSE, warning=FALSE}
+
+map <- ggplot() + 
+  geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="grey90", fill="grey90" ) + theme_bw() +
+  geom_point(data = present.occ.thin, aes(x = Longitude, y = Latitude), colour = "#59A3F8") +
+  xlab("Longitude") + ylab("Latitude")
+
+map_pres <- ggExtra::ggMarginal(map, type = "histogram", fill = "#59A3F8", colour = NA)
+
+histo_pres <- ggplot(present.occ.thin, aes(x = year)) + geom_histogram() + theme_bw() +
+  xlab("")
+
+ggarrange(plotlist = list(map_pres, ggarrange(plotlist = list(histo_pres, NA), widths = c(1, 0.17), ncol = 2)), heights = c(2,1), ncol = 1, labels = c("b", NA))
+
+#dim(present.occ.thin)
+
+```
+
+
+```{r}
+
+ggarrange(plotlist = list(map_past, map_pres, histo_past, histo_pres), heights = c(1,0.5,1,0.5), labels = c("a", "b"))
+
+
+```
+
+
+## 1.6. Has the niche shifted?
+
+
+### 1.6.1. COUE analysis
+
+**COUE framework:** stands for centroid shift, overlap, unfilling, and expansion. It was purposely developed to assess climatic niche conservatism among phylogenies and species’ populations across space and time. The COUE framework estimates occurrence densities of two entities’ (e.g., species, populations) realized climatic niches in a gridded environmental space to decompose niche changes into three niche metrics:
+
+- **niche stability** - the proportion of the invaded niche overlapping the native niche;
+- **niche unfilling** - the proportion of the native niche non-overlapping the invaded niche;
+- **niche expansion** - the proportion of the invaded niche non-overlapping the native niche.
+
+(https://www.nature.com/articles/s41598-020-64568-2)
+(https://www.pnas.org/doi/full/10.1073/pnas.2004289117 - Figure 1)
+
+
+#### 1.6.1.1. Variables contribution
+
+After selecting the environmental variables, we need to evaluate their contribution and impact. 
+
+**PCA of the entire environmental space: **
+
+Direction and strength of variable contribution. Using representative variables based on present data. 
+
+```{r variables contributions to niche shift, echo=FALSE}
+
+
+### PCA-ENVIRONMENT
+# the pca is calibrated on all the sites of the study area, including both time periods
+####### with thinned data
+pca.clim <- dudi.pca(globalEnvM[, vi@results$Variables], center = TRUE,
+                     scale = TRUE, scannf = FALSE, nf = 2)
+
+global.scores <- pca.clim$li
+
+pastLS.scores <- suprow(pca.clim, final_past.df[, vi@results$Variables])$li   
+recentLS.scores <- suprow(pca.clim, final_recent.df[, vi@results$Variables])$li
+
+pastEnv.scores <- suprow(pca.clim, midEnvM[, vi@results$Variables])$li
+recentEnv.scores <- suprow(pca.clim, eurEnvM[, vi@results$Variables])$li
+
+
+# plot variable contributions
+pca_plot = my.plot.contrib(contrib=pca.clim$co, eigen=pca.clim$eig) + title("")
+
+pca.clim$co
+```
+
+
+### 1.6.1.2. Niche dynamics per variable:
+
+shift of the niche (and its centroid) along the variable gradient, compared to the shift of the available climate.
+
+For each variable, orange area represents the past niche, blue the present and green the overlap. Lines represent the climate in the past (orange) and present (blue), using 100% (solid) and 90% (dashed) of available climates. The black arrow indicates the climate centroid shift between past and present, and the dotted one the niche shift.
+
+
+All interpretation from here should be careful because these variables are just the statistical representatives of all other, each of the variables shown here is correlated with many others. 
+
+
+
+```{r change in niche per variable1, echo=FALSE, message=FALSE}
+# gridding the past niche
+grid.clim.t.nat <- ecospat.grid.clim.dyn(glob = na.omit(data.frame(globalEnvM[,"bio4"])),
+                                         glob1 = na.omit(data.frame(midEnvM[,"bio4"])),
+                                         na.omit(data.frame(final_past.df)[, "bio4"]), th.sp = 0)
+
+# gridding the recent niche
+grid.clim.t.inv <- ecospat.grid.clim.dyn (glob = na.omit(data.frame(globalEnvM[,"bio4"])), 
+                                          glob1 = na.omit(data.frame(eurEnvM[,"bio4"])), 
+                                          na.omit(data.frame(final_recent.df)[,"bio4"]), th.sp = 0)
+
+t.dyn <- ecospat.niche.dyn.index (z1 = grid.clim.t.nat, z2 = grid.clim.t.inv, intersection=0.1)
+
+t.dyn$dynamic.index.w
+
+ecospat.plot.niche.dyn(z1 = grid.clim.t.nat, z2 = grid.clim.t.inv, quant=0.1, interest=1, title= "", name.axis1="Temperature Seasonality 
+(standard deviation ×100)", 
+                       col.unf = "#D46F10", col.exp = "#59A3F8", col.stab = "#4CA49E", colZ1 = "#D46F10", colZ2 = "#4B8FF7", transparency = 20)
+ecospat.shift.centroids(sp1 = na.omit(data.frame(final_past.df)[,"bio4"]),
+                        sp2 = na.omit(data.frame(final_recent.df)[,"bio4"]),
+                        clim1 = na.omit(data.frame(midEnvM)[,"bio4"]),
+                        clim2 = na.omit(data.frame(eurEnvM)[,"bio4"]), col = "black")
+```
+
+
+
+
+```{r change in niche per variable2, echo=FALSE}
+
+# gridding the native niche
+grid.clim.t.nat <- ecospat.grid.clim.dyn(glob = na.omit(data.frame(globalEnvM[,"bio8"])),
+                                         glob1 = na.omit(data.frame(midEnvM[,"bio8"])),
+                                         na.omit(data.frame(final_past.df)[,"bio8"]))
+
+# gridding the invasive niche
+grid.clim.t.inv <- ecospat.grid.clim.dyn (glob = na.omit(data.frame(globalEnvM[,"bio8"])), 
+                                          glob1 = na.omit(data.frame(eurEnvM[,"bio8"])), 
+                                          na.omit(data.frame(final_recent.df)[,"bio8"]))
+
+t.dyn <- ecospat.niche.dyn.index (grid.clim.t.nat, grid.clim.t.inv, intersection=0.1)
+
+t.dyn$dynamic.index.w
+
+
+ecospat.plot.niche.dyn(z1 = grid.clim.t.nat, z2 = grid.clim.t.inv, quant=0.1, interest=2, title= "", name.axis1="Mean temperature of wettest quarter", col.unf = "#D46F10", col.exp = "#59A3F8", col.stab = "#4CA49E", colZ1 = "#D46F10", colZ2 = "#4B8FF7", transparency = 20)
+ecospat.shift.centroids(sp1 = na.omit(data.frame(final_past.df)[,"bio8"]),
+                        sp2 = na.omit(data.frame(final_recent.df)[,"bio8"]),
+                        clim1 = na.omit(data.frame(midEnvM)[,"bio8"]),
+                        clim2 = na.omit(data.frame(eurEnvM)[,"bio8"]), col = "black")
+
+```
+
+
+
+```{r change in niche per variable3, echo=FALSE}
+  
+# gridding the native niche
+grid.clim.t.nat <- ecospat.grid.clim.dyn(glob = na.omit(data.frame(globalEnvM[,"bio13"])),
+                                         glob1 = na.omit(data.frame(midEnvM[,"bio13"])),
+                                         na.omit(data.frame(final_past.df)[,"bio13"]), th.sp = 0)
+
+# gridding the invasive niche
+grid.clim.t.inv <- ecospat.grid.clim.dyn (glob = na.omit(data.frame(globalEnvM[,"bio13"])), 
+                                          glob1 = na.omit(data.frame(eurEnvM[,"bio13"])), 
+                                          na.omit(data.frame(final_recent.df)[,"bio13"]), th.sp = 0)
+
+t.dyn <- ecospat.niche.dyn.index (grid.clim.t.nat, grid.clim.t.inv, intersection=0.1)
+
+t.dyn$dynamic.index.w
+
+
+ecospat.plot.niche.dyn(grid.clim.t.nat, grid.clim.t.inv, quant=0.1, interest=2, title= "", name.axis1="Precipitation of wettest month", col.unf = "#D46F10", col.exp = "#59A3F8", col.stab = "#4CA49E", colZ1 = "#D46F10", colZ2 = "#4B8FF7", transparency = 20)
+ecospat.shift.centroids(na.omit(data.frame(final_past.df)[,"bio13"]),
+                        na.omit(data.frame(final_recent.df)[,"bio13"]),
+                        na.omit(data.frame(midEnvM)[,"bio13"]),
+                        na.omit(data.frame(eurEnvM)[,"bio13"]), col = "black")
+
+```
+
+
+
+```{r change in niche per variable4, echo=FALSE, message=FALSE, warning=FALSE}
+  
+# gridding the native niche
+grid.clim.t.nat <- ecospat.grid.clim.dyn(glob = na.omit(data.frame(globalEnvM[,"bio15"])),
+                                         glob1 = na.omit(data.frame(midEnvM[,"bio15"])),
+                                         na.omit(data.frame(final_past.df)[,"bio15"]), th.sp = 0)
+
+# gridding the invasive niche
+grid.clim.t.inv <- ecospat.grid.clim.dyn (glob = na.omit(data.frame(globalEnvM[,"bio15"])), 
+                                          glob1 = na.omit(data.frame(eurEnvM[,"bio15"])), 
+                                          na.omit(data.frame(final_recent.df)[,"bio15"]), th.sp = 0)
+
+t.dyn <- ecospat.niche.dyn.index (grid.clim.t.nat, grid.clim.t.inv, intersection=0.1)
+
+t.dyn$dynamic.index.w
+
+
+ecospat.plot.niche.dyn(grid.clim.t.nat, grid.clim.t.inv, quant=0.1, interest=2, title= "", name.axis1="Precipitation Seasonality
+(Coefficient of Variation)", col.unf = "#D46F10", col.exp = "#59A3F8", col.stab = "#4CA49E", colZ1 = "#D46F10", colZ2 = "#4B8FF7", transparency = 20)
+ecospat.shift.centroids(na.omit(data.frame(final_past.df)[,"bio15"]),
+                        na.omit(data.frame(final_recent.df)[,"bio15"]),
+                        na.omit(data.frame(midEnvM)[,"bio15"]),
+                        na.omit(data.frame(eurEnvM)[,"bio15"]), col = "black")
+
+```
+
+
+
+```{r change in niche per variable5, echo=FALSE, message=FALSE, warning=FALSE}
+  
+# gridding the native niche
+grid.clim.t.nat <- ecospat.grid.clim.dyn(glob = na.omit(data.frame(globalEnvM[,"cropland"])),
+                                         glob1 = na.omit(data.frame(midEnvM[,"cropland"])),
+                                         na.omit(data.frame(final_past.df)[,"cropland"]), th.sp = 0)
+
+# gridding the invasive niche
+grid.clim.t.inv <- ecospat.grid.clim.dyn (glob = na.omit(data.frame(globalEnvM[,"cropland"])), 
+                                          glob1 = na.omit(data.frame(eurEnvM[,"cropland"])), 
+                                          na.omit(data.frame(final_recent.df)[,"cropland"]), th.sp = 0)
+
+t.dyn <- ecospat.niche.dyn.index (grid.clim.t.nat, grid.clim.t.inv, intersection=0.1)
+
+t.dyn$dynamic.index.w
+
+
+ecospat.plot.niche.dyn(grid.clim.t.nat, grid.clim.t.inv, quant=0.1, interest=2, title= "", name.axis1="Cropland", col.unf = "#D46F10", col.exp = "#59A3F8", col.stab = "#4CA49E", colZ1 = "#D46F10", colZ2 = "#4B8FF7", transparency = 20)
+ecospat.shift.centroids(na.omit(data.frame(final_past.df)[,"cropland"]),
+                        na.omit(data.frame(final_recent.df)[,"cropland"]),
+                        na.omit(data.frame(midEnvM)[,"cropland"]),
+                        na.omit(data.frame(eurEnvM)[,"cropland"]), col = "black")
+
+```
+
+
+
+```{r change in niche per variable6, echo=FALSE, message=FALSE, warning=FALSE}
+  
+# gridding the native niche
+grid.clim.t.nat <- ecospat.grid.clim.dyn(glob = na.omit(data.frame(globalEnvM[,"silt_15.30cm"])),
+                                         glob1 = na.omit(data.frame(midEnvM[,"silt_15.30cm"])),
+                                         na.omit(data.frame(final_past.df)[,"silt_15.30cm"]), th.sp = 0)
+
+# gridding the invasive niche
+grid.clim.t.inv <- ecospat.grid.clim.dyn (glob = na.omit(data.frame(globalEnvM[,"silt_15.30cm"])), 
+                                          glob1 = na.omit(data.frame(eurEnvM[,"silt_15.30cm"])), 
+                                          na.omit(data.frame(final_recent.df)[,"silt_15.30cm"]), th.sp = 0)
+
+t.dyn <- ecospat.niche.dyn.index (grid.clim.t.nat, grid.clim.t.inv, intersection=0.1)
+
+t.dyn$dynamic.index.w
+
+
+ecospat.plot.niche.dyn(grid.clim.t.nat, grid.clim.t.inv, quant=0.1, interest=2, title= "", name.axis1="Silt percentage", col.unf = "#D46F10", col.exp = "#59A3F8", col.stab = "#4CA49E", colZ1 = "#D46F10", colZ2 = "#4B8FF7", transparency = 20)
+ecospat.shift.centroids(na.omit(data.frame(final_past.df)[,"silt_15.30cm"]),
+                        na.omit(data.frame(final_recent.df)[,"silt_15.30cm"]),
+                        na.omit(data.frame(midEnvM)[,"silt_15.30cm"]),
+                        na.omit(data.frame(eurEnvM)[,"silt_15.30cm"]), col = "black")
+
+```
+
+
+
+#### 1.6.1.3. Niche overlap
+
+**Niche in environmental space:** 
+
+Stability represents the conditions occupied by the species in both the native and invaded range; unfilling shows the conditions occupied in the native but not in the invaded range; and expansion represents the conditions only occupied in the invaded range.
+
+Niche stability (purple), unfilling (orange) and expansion (blue); white arrow shows the niche centroid shift from the past (orange dot) to present (blue dot). Dark shading shows the density of occurrences in the present range. Lines represent the climate of the Eurasian Holarctic in the past (orange) and present (blue), using 100% (solid) and 90% (dashed) of available climates. The black arrow indicates the climate centroid shift between past and present.
+
+
+
+```{r plot niche overlap, echo=FALSE, message=FALSE, warning=FALSE}
+## calculate the Occurrence Density Grid for both native and invasive species
+nativeGrid <- ecospat.grid.clim.dyn(glob = na.omit(global.scores),
+                                    glob1 = na.omit(pastEnv.scores),
+                                    sp = na.omit(pastLS.scores))
+
+invasiveGrid <- ecospat.grid.clim.dyn(glob = na.omit(global.scores),
+                                      glob1 = na.omit(recentEnv.scores), 
+                                      sp = na.omit(recentLS.scores))
+
+
+
+
+nat = terra::as.points(nativeGrid$z.uncor)
+df_nat = data.frame(values(nat), geom(nat))
+df_nat[df_nat == 0] <- NA
+
+inv = terra::as.points(invasiveGrid$z.uncor)
+df_inv = data.frame(values(inv), geom(inv))
+df_inv[df_inv == 0] <- NA
+
+df_overlap <- inner_join(df_nat, df_inv, by = c("x", "y"), suffix = c("_nat", "_inv"))
+
+library(ggnewscale)
+
+niche_plot = ggplot() +
+  geom_tile(data = na.omit(df_nat[, -6]), aes(x = x, y = y, fill = lyr.1), size = 1) +
+  scale_fill_gradient(name = "Natural", low = "#D46F10", high = "#D46F10") +
+  
+    new_scale_fill() +
+
+geom_tile(data = na.omit(df_inv[, -6]), aes(x = x, y = y, fill = lyr.1), alpha = 0.7) +
+scale_fill_gradient(name = "Invasive", low = "#59A3F8", high = "#59A3F8") +
+  
+  new_scale_fill() +
+  
+  # Overlap in purple
+  geom_tile(data = na.omit(df_overlap[, -c(6,10)]), aes(x = x, y = y), fill = "#4CA49E", alpha = 0.6) +
+  
+  theme_bw() + theme(legend.position = "none", panel.grid = element_blank()) +
+  xlab("Axis 1") + ylab("Axis 2") +
+  
+  
+  stat_density_2d(data = na.omit(pastLS.scores),
+  aes(x = Axis1, y = Axis2, alpha = after_stat(level)),
+  geom = "polygon", bins = 2, fill = "black") +  
+  
+  
+  stat_density_2d(data = na.omit(recentLS.scores),
+  aes(x = Axis1, y = Axis2, alpha = after_stat(level)),
+  geom = "polygon", bins = 2, fill = "black", alpha = 0.4) +  
+
+  
+  
+  geom_point(data = na.omit(pastLS.scores), aes(x = median(Axis1), y = median(Axis2)), size = 4, colour = cbPalette[2]) +
+
+  geom_point(data = na.omit(recentLS.scores), aes(x = median(Axis1), y = median(Axis2)), size = 4, colour = cbPalette[3]) +
+  
+  
+  geom_segment(aes(x = median(na.omit(pastLS.scores$Axis1)), y = median(na.omit(pastLS.scores$Axis2)), 
+                   xend = median(na.omit(recentLS.scores$Axis1)), yend = median(na.omit(recentLS.scores$Axis2))),
+                  arrow = arrow(length = unit(0.2, "cm")), , colour = "white") +
+  
+  geom_segment(aes(x = median(na.omit(pastEnv.scores$Axis1)), y = median(na.omit(pastEnv.scores$Axis2)), 
+                   xend = median(na.omit(recentEnv.scores$Axis1)), yend = median(na.omit(recentEnv.scores$Axis2))),
+                  arrow = arrow(length = unit(0.2, "cm")), , colour = "black")
+
+
+
+```
+
+
+Niche expansion followed environmental changes (white arrow has same direction as the shift for environmental space (black arrow)). However, the centroid shift for blackgrass is greater than the whole env shift. 
+
+
+
+**Niche dynamics metrics:** 
+
+Niche stability is the proportion of niche A conditions overlapping with niche B. Niche expansion is the proportion of niche B range that does not overlap with niche A. Niche unfilling corresponds to the proportion of the niche A non-present in niche B.
+
+```{r, echo=FALSE}
+ecospat.niche.dyn.index(na.omit(nativeGrid), na.omit(invasiveGrid), intersection = 0.1)$dynamic.index.w
+
+```
+
+
+**Niche overlap:** 
+
+D value takes the differences in occurrence densities to measure Schöner’s D index, giving a value between 0 (no overlap) and 1 (full overlap).
+
+```{r, echo=FALSE}
+# calculate niche overlap
+ecospat.niche.overlap(nativeGrid, invasiveGrid, cor=T)$D
+```
+
+
+**Niche equivalency and similarity:** 
+
+The niche equivalency test and the niche similarity test allow to quantify the statistical significance of detected niche differences against null model niches taken randomly from the background data. 
+
+*The niche equivalency test determines whether the niche overlap is constant when randomly reallocating the occurrences of  both  entities  among  the  two  ranges*, i.e., whether niches of two entities in two geographical ranges are equivalent.  All  occurrences  are pooled  and  randomly  split  into  two  datasets, maintaining  the number of occurrences as in the original datasets, and the niche overlap  statistic D is  calculated.  This  process  is  repeated  1000 times (to ensure that the null hypothesis can be rejected with high  confidence). If  the observed value of D falls within the density of 95%  of  the  simulated  values,  the  null  hypothesis  of  niche equivalency cannot be rejected. I.e., a p-value below 0.05 imply that the niches are significantly different than expected by random models. 
+
+
+The  niche  similarity  test  differs  from  the  equivalency  test because  the  former  examines  whether  the  overlap  between observed  niches  in  two  ranges  is  different  from  the  overlap between the observed niche in one range and niches selected at random from the other range. In other words, the *niche similarity test addresses whether the environmental niche occupied in one range is more similar to the one occupied in the other range than would be expected by chance*. For this test, we randomly  shift  the  entire  observed  density  of  occurrences  in  one range (the centre of the simulated density of occurrence is randomly picked among available environments) and calculate the overlap of  the simulated niche with the observed niche in the other  range. The  test  of  niche  similarity  is  also  based  on  1000 repetitions. If  the observed overlap is greater than 95% of  the simulated values, the entity occupies environments in both of its ranges  that  are  more  similar  to  each  other  than  expected  by chance. If the p-value is below 0.05, then the niches are significantly similar.
+
+
+(https://www.pnas.org/doi/full/10.1073/pnas.2004289117 - Figure 2)
+See https://onlinelibrary.wiley.com/doi/epdf/10.1111/j.1466-8238.2011.00698.x 
+
+```{r, echo=FALSE}
+# perform the Niche Equivalency Test
+eq.test <- ecospat.niche.equivalency.test(nativeGrid, invasiveGrid, rep = 1000, ncores = 2, overlap.alternative = "higher", intersection = 0, expansion.alternative = "lower", stability.alternative = "higher", unfilling.alternative = "lower")
+
+# perform the Niche Similarity Test
+sim.test <- ecospat.niche.similarity.test(nativeGrid, invasiveGrid, rep = 1000, rand.type = 1, ncores = 2, overlap.alternative = "higher", intersection = 0, expansion.alternative = "lower", stability.alternative = "higher", unfilling.alternative = "lower")
+
+# plot Equivalency and Similarity Test
+par(mfrow=c(1,2))
+ecospat.plot.overlap.test(eq.test, "D", "Equivalency") 
+ecospat.plot.overlap.test(sim.test, "D", "Similarity")
+```
+
+
+# 2. Can we predict blackgrass movements across time?
+
+
+## Multivariate Environmental Similarity Surfaces (MESS) 
+
+The Multivariate Environmental Similarity Surfaces (MESS) analysis measures the similarity in the analysed variables between any given locality in the projection dataset and the localities in the reference (training) dataset (Elith et al. 2010).
+
+- **TOTAL:** Similarity between each point in the projection dataset and those in the reference dataset. Negative values indicate localities that are environmentally dissimilar from the reference region.
+- **MoD:** the most dissimilar variable, i.e., the limiting factor or the variable that drives the MESS in that locality (Elith et al. 2010).
+
+
+## 2.1. Past-on-past
+
+
+### 2.1.1. Based on past occurrences and past climate data, what envs were more similar across Europe?
+
+
+**Environment**
+
+
+```{r MESS past-past, echo=FALSE, message=FALSE, warning=FALSE}
+library(modEvA)
+pastel_me <- c("#FFCCCC","#FFFFCC","#CCFFCC")
+library(caret)
+
+### MESS function: from V, to P
+mess.pastToPast <- MESS(V = final_past.df[, vi@results$Variables], 
+                        P = na.omit(as.data.frame(rasterToPoints(final_past))[, vi@results$Variables]))
+
+mess.pastToPast <- cbind(mess.pastToPast, as.data.frame(na.omit(rasterToPoints(final_past)))[, c(1,2)])
+
+
+
+mess.pastToPast$pos <- ifelse(mess.pastToPast$TOTAL > 0, "positive", "negative")
+
+norm <- predict(preProcess(as.data.frame(mess.pastToPast$TOTAL), method = c("range")), as.data.frame(mess.pastToPast$TOTAL))
+
+mess.pastToPast$norm <- as.numeric(unlist(norm))
+
+past_mess_plot = ggplot() + 
+  geom_raster(data = na.omit(mess.pastToPast), aes(x = x, y = y, fill = norm), alpha = 0.8) + 
+  geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) + 
+  
+  scale_fill_gradientn(values = c(0, quantile(mess.pastToPast$norm, 0.25), quantile(mess.pastToPast$norm, 0.5), quantile(mess.pastToPast$norm, 0.75), 1), 
+                         #scale_fill_gradient2(low = "darkblue", high = "orangered", mid = "grey97", limits = c(-300, 100)) + 
+  #scale_fill_gradientn(values = c(0, 0.5, 1), 
+  
+                       colours = c(palette.colors()[7], palette.colors()[7], palette.colors()[5], palette.colors()[4], palette.colors()[4]), "") +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "bottom", #axis.text.x = element_blank(), axis.ticks.x = element_blank(), 
+      legend.margin=margin(0,0,0,0), legend.box.margin=margin(0,0,0,0), plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Past model")
+
+past_mess_plot
+
+
+
+
+
+a = ggplot() + 
+    geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color=NA, fill="grey90" ) + 
+  geom_point(data = na.omit(mess.pastToPast)[mess.pastToPast$TOTAL > quantile(mess.pastToPast[mess.pastToPast$TOTAL > 0, "TOTAL"], 0.25),], 
+             aes(x = x, y = y, colour = pos), alpha = 0.8, size = 0.6) + 
+
+  scale_color_manual(values = cbPalette[4]) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Past model")# +
+  geom_point(data = final_past.df, aes(x = Longitude, y = Latitude), colour = cbPalette[7])
+
+
+
+
+
+
+#ggplot() + 
+  #geom_raster(data = na.omit(mess.pastToPast), aes(x = x, y = y, fill = TOTAL), interpolate = TRUE) + 
+  #geom_point(data = past.occ.thin, aes(x = Longitude, y = Latitude), colour = cbPalette[7]) +
+  #geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                #color="black", fill=NA ) + 
+  #scale_fill_gradient2(low = "blue", high = "gold",  limits = c(-300, 100)) + 
+  #xlab("Longitude") + ylab("Latitude") + theme_bw() #+# xlim(-10, 50) + ylim(30,70)
+#theme(legend.position = "none")
+
+
+AUC(obs = final_past.df[, c(1,2)], pred = rast(rasterFromXYZ(mess.pastToPast[, c("x", "y", "norm")])))
+
+
+
+# Define your range
+min_val <- min(mess.pastToPast$TOTAL)
+max_val <- max(mess.pastToPast$TOTAL)
+zero_pos <- abs(min_val) / (max_val - min_val)  # relative position of 0
+
+
+ggplot() + 
+  geom_raster(data = na.omit(mess.pastToPast), aes(x = x, y = y, fill = TOTAL)) + 
+  #geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                #color="black", fill=NA ) + 
+  scale_fill_gradientn(values = scales::rescale(c(min_val, 0, max_val)), 
+                       colours = c(palette.colors()[7], palette.colors()[5], palette.colors()[4]), "", 
+                       limits = c(min_val, max_val)) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "bottom") +
+    geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) 
+
+
+```
+
+
+
+### 2.1.2. What drives the dissimilarity?
+
+
+```{r dissimilaritypast-past, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+colourCount = length(unique(mess.pastToPast$MoD))
+getPalette = colorRampPalette(brewer.pal(colourCount, "Set3"))
+
+past_mess_dis_plot = ggplot() + 
+    geom_raster(data = na.omit(mess.pastToPast[mess.pastToPast$pos == "negative",]), aes(x = x, y = y, fill = MoD)) +
+geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) + 
+  #geom_point(data = present.occ.thin, aes(x = Longitude, y = Latitude), shape = 3) + 
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + theme(legend.position = "bottom", plot.title = element_text(hjust = 0.5)) +
+  scale_fill_manual(values = getPalette(colourCount), "", labels = c("bio13", "bio15", "bio4", "bio8", "cropland", "silt")) +
+  #scale_color_brewer(palette = "Set3") +
+  ylim(30, 70) + xlim(-10, 50) + ggtitle("Dissimilarities in Past")
+
+past_mess_dis_plot
+
+
+h = ggplot() + 
+    geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color=NA, fill="grey90" ) + 
+  geom_point(data = na.omit(mess.pastToPast[mess.pastToPast$pos == "negative",]), 
+             aes(x = x, y = y, colour = MoD), alpha = 0.8, size = 0.6) + 
+
+  scale_colour_manual(values = getPalette(colourCount), "", labels = c("bio13", "bio15", "bio4", "bio8", "cropland", "silt")) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Dissimilarities in Past")
+
+
+
+```
+
+
+## 2.2. Past-on-present
+
+
+### 2.2.1. Based on past occurrences and present climate data, where could blackgrass be nowadays?
+
+
+**Environment**
+
+
+```{r MESS past-present, echo=FALSE, message=FALSE, warning=FALSE}
+### MESS function: from V, to P
+######### only past native ]
+mess.pastToPres <- MESS(V = final_past.df[, vi@results$Variables], 
+                        P = na.omit(as.data.frame(rasterToPoints(final_recent))[, vi@results$Variables]))
+
+mess.pastToPres <- cbind(mess.pastToPres, as.data.frame(na.omit(rasterToPoints(final_recent)))[, c(1,2)])
+
+
+
+mess.pastToPres$pos <- ifelse(mess.pastToPres$TOTAL > 0, "positive", "negative")
+
+norm <- predict(preProcess(as.data.frame(mess.pastToPres$TOTAL), method = c("range")), as.data.frame(mess.pastToPres$TOTAL))
+
+mess.pastToPres$norm <- as.numeric(unlist(norm))
+
+proj_mess_plot = ggplot() + 
+  geom_raster(data = na.omit(mess.pastToPres), aes(x = x, y = y, fill = norm), alpha = 0.8) + 
+  geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) + 
+  scale_fill_gradientn(values = c(0, quantile(mess.pastToPres$norm, 0.25), quantile(mess.pastToPres$norm, 0.5), quantile(mess.pastToPres$norm, 0.75), 1), 
+                         #scale_fill_gradient2(low = "darkblue", high = "orangered", mid = "grey97", limits = c(-300, 100)) + 
+                       colours = c(palette.colors()[7], palette.colors()[7], palette.colors()[5], palette.colors()[4], palette.colors()[4]), "") +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "bottom", 
+      legend.margin=margin(0,0,0,0), legend.box.margin=margin(0,0,0,0), plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Projected model") 
+
+proj_mess_plot
+
+
+
+b = ggplot() + 
+    geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color=NA, fill="grey90" ) + 
+  geom_point(data = na.omit(mess.pastToPres)[mess.pastToPres$TOTAL > quantile(mess.pastToPres[mess.pastToPres$TOTAL > 0, "TOTAL"], 0.25),], 
+             aes(x = x, y = y, colour = pos), alpha = 0.8, size = 0.6) + 
+
+  scale_color_manual(values = cbPalette[4]) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Projected model")
+
+
+
+
+ggplot() + 
+  geom_raster(data = na.omit(mess.pastToPres), aes(x = x, y = y, fill = norm), alpha = 0.8) + 
+  geom_point(data = present.occ.thin, aes(x = Longitude, y = Latitude), shape = 1) +
+  #geom_point(data = past.occ.thin, aes(x = Longitude, y = Latitude), colour = cbPalette[7]) +
+  geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) + 
+  scale_fill_gradientn(values = c(0, quantile(mess.pastToPres$norm, 0.25), quantile(mess.pastToPres$norm, 0.5), quantile(mess.pastToPres$norm, 0.75), 1), 
+                         #scale_fill_gradient2(low = "darkblue", high = "orangered", mid = "grey97", limits = c(-300, 100)) + 
+                       colours = c(palette.colors()[7], palette.colors()[7], palette.colors()[5], palette.colors()[4], palette.colors()[4])) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() #+ #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "none")
+
+
+
+AUC(obs = final_past.df[, c(1,2)], pred = rast(rasterFromXYZ(mess.pastToPres[, c("x", "y", "norm")])))
+##### check CI_AUC.R script for CI
+
+
+
+
+
+# Define your range
+min_val <- min(mess.pastToPres$TOTAL)
+max_val <- max(mess.pastToPres$TOTAL)
+zero_pos <- abs(min_val) / (max_val - min_val)  # relative position of 0
+
+
+ggplot() + 
+  geom_raster(data = na.omit(mess.pastToPres), aes(x = x, y = y, fill = TOTAL)) + 
+  #geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                #color="black", fill=NA ) + 
+  scale_fill_gradientn(values = scales::rescale(c(min_val, 0, max_val)), 
+                       colours = c(palette.colors()[7], palette.colors()[5], palette.colors()[4]), "", 
+                       limits = c(min_val, max_val)) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "bottom") +
+    geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) 
+
+
+
+```
+
+
+### 2.2.2. What drives the dissimilarity?
+
+
+```{r dissimilarity past-present, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+colourCount = length(unique(mess.pastToPres$MoD))
+getPalette = colorRampPalette(brewer.pal(colourCount, "Set3"))
+
+proj_mess_dis_plot = ggplot() + 
+    geom_raster(data = na.omit(mess.pastToPres[mess.pastToPres$pos == "negative",]), aes(x = x, y = y, fill = MoD)) +
+geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) + 
+  #geom_point(data = present.occ.thin, aes(x = Longitude, y = Latitude), shape = 3) + 
+  xlab("Longitude") + ylab("") + theme_bw() + theme(legend.position = "bottom", plot.title = element_text(hjust = 0.5)) +
+  scale_fill_manual(values = getPalette(colourCount), "", labels = c("bio13", "bio15", "bio4", "bio8", "cropland", "silt")) +
+  #scale_color_brewer(palette = "Set3") +
+  ylim(30, 70) + xlim(-10, 50) + ggtitle("Dissimilarities in Projected")
+
+proj_mess_dis_plot
+
+
+g = ggplot() + 
+    geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color=NA, fill="grey90" ) + 
+  geom_point(data = na.omit(mess.pastToPres[mess.pastToPres$pos == "negative",]), 
+             aes(x = x, y = y, colour = MoD), alpha = 0.8, size = 0.6) + 
+
+  scale_colour_manual(values = getPalette(colourCount), "", labels = c("bio13", "bio15", "bio4", "bio8", "cropland", "silt")) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Dissimilarities in Projected")
+
+
+
+```
+
+
+## 2.3. Present-on-present
+
+
+### 2.3.1. Based on present occurrences and present climate data, what envs are more similar across Europe?
+
+
+**Environment**
+
+
+```{r MESS present-present, echo=FALSE, message=FALSE, warning=FALSE}
+
+### MESS function: from V, to P
+mess.presToPres <- MESS(V = final_recent.df[, vi@results$Variables], 
+                        P = na.omit(as.data.frame(rasterToPoints(final_recent))[, vi@results$Variables]))
+
+mess.presToPres <- cbind(mess.presToPres, na.omit(as.data.frame(rasterToPoints(final_recent))[, c("x", "y", vi@results$Variables)]))
+
+mess.presToPres$pos <- ifelse(mess.presToPres$TOTAL > 0, "positive", "negative")
+
+norm <- predict(preProcess(as.data.frame(mess.presToPres$TOTAL), method = c("range")), as.data.frame(mess.presToPres$TOTAL))
+
+mess.presToPres$norm <- as.numeric(unlist(norm))
+
+pres_mesS_plot = ggplot() + 
+  geom_raster(data = na.omit(mess.presToPres)[,7:ncol(mess.presToPres)], aes(x = x, y = y, fill = norm), alpha = 0.8) + 
+  geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) + 
+  scale_fill_gradientn(values = c(0, quantile(mess.presToPres$norm, 0.25), quantile(mess.presToPres$norm, 0.5), quantile(mess.presToPres$norm, 0.75), 1), 
+                         #scale_fill_gradient2(low = "darkblue", high = "orangered", mid = "grey97", limits = c(-300, 100)) + 
+                       colours = c(palette.colors()[7], palette.colors()[7], palette.colors()[5], palette.colors()[4], palette.colors()[4]), "") +
+  xlab("Longitude") + ylab("") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "bottom", #axis.text.x = element_blank(), axis.ticks.x = element_blank(), 
+      legend.margin=margin(0,0,0,0), legend.box.margin=margin(0,0,0,0), plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Present model") 
+
+pres_mesS_plot
+
+
+AUC(obs = final_recent.df[, c(1,2)], pred = rast(rasterFromXYZ(mess.presToPres[, c("x", "y", "norm")])))
+
+
+
+
+c = ggplot() + 
+    geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color=NA, fill="grey90" ) + 
+  geom_point(data = na.omit(mess.presToPres)[mess.presToPres$TOTAL > quantile(mess.presToPres[mess.presToPres$TOTAL > 0, "TOTAL"], 0.25), 7:ncol(mess.presToPres)], 
+             aes(x = x, y = y, colour = pos), alpha = 0.8, size = 0.6) + 
+
+  scale_color_manual(values = cbPalette[4]) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Present model") #+
+  geom_point(data = final_recent.df, aes(x = Longitude, y = Latitude), colour = cbPalette[3])
+
+
+
+
+
+
+# Define your range
+min_val <- min(mess.presToPres$TOTAL)
+max_val <- max(mess.presToPres$TOTAL)
+zero_pos <- abs(min_val) / (max_val - min_val)  # relative position of 0
+
+
+ggplot() + 
+  geom_raster(data = na.omit(mess.presToPres)[,7:ncol(mess.presToPres)], aes(x = x, y = y, fill = TOTAL)) + 
+  #geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                #color="black", fill=NA ) + 
+  scale_fill_gradientn(values = scales::rescale(c(min_val, 0, max_val)), 
+                       colours = c(palette.colors()[7], palette.colors()[5], palette.colors()[4]), "", 
+                       limits = c(min_val, max_val)) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "bottom") +
+    geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) 
+
+
+
+```
+
+
+
+### 2.3.2. What drives the dissimilarity?
+
+
+```{r dissimilarity present-present, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+colourCount = length(unique(mess.presToPres$MoD))
+getPalette = colorRampPalette(brewer.pal(colourCount, "Set3"))
+
+pres_mess_dis_plot = ggplot() + 
+    geom_raster(data = (mess.presToPres[mess.presToPres$pos == "negative", 1:13]), aes(x = x, y = y, fill = MoD)) +
+geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) + 
+  #geom_point(data = present.occ.thin, aes(x = Longitude, y = Latitude), shape = 3) + 
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + theme(legend.position = "bottom", plot.title = element_text(hjust = 0.5)) +
+  scale_fill_manual(values = getPalette(colourCount), "", labels = c("bio13", "bio15", "bio4", "bio8", "cropland", "silt")) +
+  #scale_color_brewer(palette = "Set3") +
+  ylim(30, 70) + xlim(-10, 50) + ggtitle("Dissimilarities in Present")
+
+pres_mess_dis_plot
+
+
+
+
+
+
+```
+
+
+
+## 2.4. Differences in projections: potential movements and adaptations??
+
+
+### 2.4.1. Past-on-past vs past-on-present
+
+
+```{r diffs past-past vs past-present, echo=FALSE, message=FALSE, warning=FALSE}
+
+changepres = merge(mess.pastToPast[, c("x", "y", "TOTAL")], mess.pastToPres[, c("x", "y", "TOTAL")], by = c("x", "y"))
+changepres$diff <- changepres$TOTAL.y - changepres$TOTAL.x
+changepres$pos <- ifelse(changepres$diff > 0, "positive", "negative")
+changepres$pos <- ifelse(changepres$TOTAL.x > 0 & changepres$TOTAL.y > 0, "Similar then, similar now", 
+                         ifelse(changepres$TOTAL.x < 0 & changepres$TOTAL.y < 0, "Dissimilar then, dissimilar now", 
+                                ifelse(changepres$TOTAL.x > 0 & changepres$TOTAL.y < 0, "Similar then, dissimilar now", 
+                                ifelse(changepres$TOTAL.x < 0 & changepres$TOTAL.y > 0, "Dissimilar then, similar now", NA))))
+
+
+past_proj_diff_plot = ggplot() + geom_raster(data = na.omit(changepres), aes(x = x, y = y, fill = pos), alpha = 0.8) + 
+  scale_fill_manual(values = c("grey70", palette.colors()[8], palette.colors()[3], palette.colors()[4]), name = "") +
+  geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) + 
+    #geom_point(data = past.occ.native, aes(x = Longitude, y = Latitude)) +
+  #scale_shape_manual(values = c(16,1)) +
+  #geom_point(data = final_recent.df, aes(x = Longitude, y = Latitude), colour = cbPalette[6], shape = 3) +
+  #geom_point(data = final_past.df, aes(x = Longitude, y = Latitude), colour = cbPalette[2], shape = 4) +
+  #scale_fill_gradient2(low = "darkblue", high = "orangered", mid = "grey97", limits = c(-300, 100)) + 
+  #scale_color_gradient(low = "blue", high = "gold", limits = c(min(log10(mess.pastToPres$TOTAL+1000)), max(log10(mess.pastToPres$TOTAL+1000)))) +
+  xlab("Longitude") + ylab("") + theme_bw() + 
+theme(legend.position = "bottom", #axis.text.x = element_blank(), axis.ticks.x = element_blank(), 
+      legend.margin=margin(0,0,0,0), plot.title = element_text(hjust = 0.5)) +   xlim(-10, 50) + ylim(30,70) +
+  ggtitle("Past - Projected")
+
+past_proj_diff_plot
+
+
+e = ggplot() + 
+    geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color=NA, fill="grey90" ) + 
+  geom_point(data = na.omit(changepres)[!(changepres$TOTAL.x > 0 & changepres$TOTAL.y > 0) ,], 
+             aes(x = x, y = y, colour = pos), alpha = 0.8, size = 0.6) + 
+  geom_point(data = final_recent.df, aes(x = Longitude, y = Latitude), shape = 1, size = 0.3) +
+
+  scale_color_manual(values = c("grey70", palette.colors()[3], palette.colors()[8])) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Past - Projected differences")
+
+```
+
+
+
+### 2.4.2. Past-on-present vs present-on-present
+
+
+```{r diffs past-present vs present-present, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+changeprespres = merge(mess.pastToPres[, c("x", "y", "TOTAL")], mess.presToPres[, c("x", "y", "TOTAL")], by = c("x", "y"))
+changeprespres$diff <- changeprespres$TOTAL.y - changeprespres$TOTAL.x
+changeprespres$pos <- ifelse(changeprespres$diff > 0, "positive", "negative")
+changeprespres$pos <- ifelse(changeprespres$TOTAL.x > 0 & changeprespres$TOTAL.y > 0, "Similar then, similar now", 
+                         ifelse(changeprespres$TOTAL.x < 0 & changeprespres$TOTAL.y < 0, "Dissimilar then, dissimilar now", 
+                                ifelse(changeprespres$TOTAL.x > 0 & changeprespres$TOTAL.y < 0, "Similar then, dissimilar now", 
+                                ifelse(changeprespres$TOTAL.x < 0 & changeprespres$TOTAL.y > 0, "Dissimilar then, similar now", NA))))
+
+
+proj_pres_diff_plot = ggplot() + geom_raster(data = na.omit(changeprespres), aes(x = x, y = y, fill = pos), alpha = 0.8) + 
+  scale_fill_manual(values = c("grey70", palette.colors()[8], palette.colors()[3], palette.colors()[4]), name = "") +
+  geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) + 
+    #geom_point(data = past.occ.native, aes(x = Longitude, y = Latitude)) +
+  #scale_shape_manual(values = c(16,1)) +
+  #geom_point(data = final_recent.df, aes(x = Longitude, y = Latitude), colour = cbPalette[6], shape = 3) +
+  #geom_point(data = final_past.df, aes(x = Longitude, y = Latitude), colour = cbPalette[2], shape = 4) +
+  #scale_color_gradient2(low = "darkblue", high = "orangered", mid = "grey97", limits = c(-300, 100)) + 
+  #scale_color_gradient(low = "blue", high = "gold", limits = c(min(log10(mess.pastToPres$TOTAL+1000)), max(log10(mess.pastToPres$TOTAL+1000)))) +
+  xlab("Longitude") + ylab("") + theme_bw() + theme(legend.position = "bottom", #axis.text.x = element_blank(), axis.ticks.x = element_blank(), 
+      legend.margin=margin(0,0,0,0), plot.title = element_text(hjust = 0.5)) +   xlim(-10, 50) + ylim(30,70) +
+  ggtitle("Projected - Present") +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE))
+
+proj_pres_diff_plot
+
+
+
+d = ggplot() + 
+    geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color=NA, fill="grey90" ) + 
+  geom_point(data = na.omit(changeprespres)[!(changeprespres$TOTAL.x > 0 & changeprespres$TOTAL.y > 0) ,], 
+             aes(x = x, y = y, colour = pos), alpha = 0.8, size = 0.6) + 
+
+  scale_color_manual(values = c("grey70", palette.colors()[3], palette.colors()[8])) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Projected - Present differences")
+
+```
+
+
+
+### 2.4.3. Past-on-past vs present-on-present
+
+
+```{r diffs past-past vs present-present, echo=FALSE, message=FALSE, warning=FALSE}
+
+changepp = merge(mess.pastToPast[, c("x", "y", "TOTAL")], mess.presToPres[, c("x", "y", "TOTAL")], by = c("x", "y"))
+changepp$diff <- changepp$TOTAL.y - changepp$TOTAL.x
+changepp$pos <- ifelse(changepp$diff > 0, "positive", "negative")
+changepp$pos <- ifelse(changepp$TOTAL.x > 0 & changepp$TOTAL.y > 0, "Similar then, similar now", 
+                         ifelse(changepp$TOTAL.x < 0 & changepp$TOTAL.y < 0, "Dissimilar then, dissimilar now", 
+                                ifelse(changepp$TOTAL.x > 0 & changepp$TOTAL.y < 0, "Similar then, dissimilar now", 
+                                ifelse(changepp$TOTAL.x < 0 & changepp$TOTAL.y > 0, "Dissimilar then, similar now", NA))))
+
+
+past_pres_diff_plot = ggplot() + geom_raster(data = na.omit(changepp), aes(x = x, y = y, fill = pos), alpha = 0.8) + 
+  scale_fill_manual(values = c("grey70", palette.colors()[8], palette.colors()[3], palette.colors()[4]), name = "") +
+  geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) + 
+    #geom_point(data = past.occ.native, aes(x = Longitude, y = Latitude)) +
+  #scale_shape_manual(values = c(16,1)) +
+  #geom_point(data = final_recent.df, aes(x = Longitude, y = Latitude), colour = cbPalette[6], shape = 3) +
+  #geom_point(data = final_past.df, aes(x = Longitude, y = Latitude), colour = cbPalette[2], shape = 4) +
+  #scale_color_gradient2(low = "darkblue", high = "orangered", mid = "grey97", limits = c(-300, 100)) + 
+  #scale_color_gradient(low = "blue", high = "gold", limits = c(min(log10(mess.pastToPres$TOTAL+1000)), max(log10(mess.pastToPres$TOTAL+1000)))) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + theme(legend.position = "bottom", #axis.text.x = element_blank(), axis.ticks.x = element_blank(), 
+      legend.margin=margin(0,0,0,0), plot.title = element_text(hjust = 0.5)) +   xlim(-10, 50) + ylim(30,70) +
+  ggtitle("Past - Present")
+
+past_pres_diff_plot
+
+
+f = ggplot() + 
+    geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color=NA, fill="grey90" ) + 
+  geom_point(data = na.omit(changepp)[!(changepp$TOTAL.x > 0 & changepp$TOTAL.y > 0) ,], 
+             aes(x = x, y = y, colour = pos), alpha = 0.8, size = 0.6) + 
+
+  scale_color_manual(values = c("grey70", palette.colors()[3], palette.colors()[8])) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Past - Present differences")
+
+
+
+
+
+print(paste("Proportion of Dissimilar then, similar now =", round(as.numeric(nrow(changepp[changepp$pos == "Dissimilar then, similar now",]) / nrow(changepp)), 2)))
+print(paste("Proportion of Similar then, dissimilar now =", round(as.numeric(nrow(changepp[changepp$pos == "Similar then, dissimilar now",]) / nrow(changepp)), 2)))
+print(paste("Proportion of Dissimilar then, dissimilar now", round(as.numeric(nrow(changepp[changepp$pos == "Dissimilar then, dissimilar now",]) / nrow(changepp)), 2)))
+print(paste("Proportion of Similar then, similar now", round(as.numeric(nrow(changepp[changepp$pos == "Similar then, similar now",]) / nrow(changepp)), 2)))
+
+
+```
+
+
+
+
+```{r}
+ggarrange(ggarrange(plotlist = list(past_mess_plot, pres_mesS_plot), ncol = 2), 
+          ggarrange(plotlist = list(past_pres_diff_plot, past_proj_diff_plot), ncol = 2, common.legend = TRUE, legend = "bottom"), 
+          nrow = 2, heights = c(1.5, 1))
+
+ggarrange(ggarrange(plotlist = list(proj_mess_plot, proj_pres_diff_plot), ncol = 2),
+          ggarrange(plotlist = list(past_mess_dis_plot, proj_mess_dis_plot), ncol = 2, common.legend = TRUE, legend = "bottom"),
+          nrow = 2)
+
+
+
+
+ggarrange(plotlist = list(a,e,c,f), ncol = 2, nrow = 2, labels = c("a", "b", "c", "d"))
+
+ggarrange(plotlist = list(b,d,h,g), ncol = 2, nrow = 2, labels = c("a", "b", "c", "d"))
+
+
+```
+
+
+
+## 2.5. Present occurrences projected onto future environmental data
+
+
+Using calibrated CMIP6 climate data for projected future climates, we can assess most similar and dissimilar environments compared to today.
+
+
+### 2.5.1. Environmental data 
+19 BioClim variables from MPI-ESM1-2-HR_245 model for years 2061-2080.
+
+
+**Future climate:**
+
+```{r future data, echo=FALSE}
+#?geodata
+fut <- cmip6_world("MPI-ESM1-2-LR", res = 5, ssp = "245", var = "bioc", path = ".", time = "2061-2080")
+#fut <- crop(fut, extEU)
+names(fut) <- paste0(rep("bio", 19), 1:19)
+fut <- terra::aggregate(fut, fact=6, fun='mean')
+plot(fut)
+fut <- stack(fut)
+
+### to do Europe only
+#final_fut <- stack(fut, soil, land)
+### if whole world
+# run line 310 for biovars_recent
+final_fut <- fut
+
+eu_fut <- crop(fut, extEU)
+plot(eu_fut[[c(4,8,13,15)]])
+```
+
+
+
+**Future climate change:**
+
+Positive values represent increases in time.
+
+```{r, echo=FALSE}
+diff_fut = fut - final_recent[[1:19]]
+plot(diff_fut)
+
+```
+
+
+### 2.5.2. Future projections
+
+
+```{r load data, echo=FALSE, message=FALSE, warning=FALSE}
+###########
+########### ORGANIZE DATA
+###########
+
+# crop the environmental data to the native and invasive geographical ranges
+eurEnvR <- crop(final_recent, extEU)
+futEnvR <- crop(final_fut, extEU)
+futEnvR <- stack(futEnvR, eurEnvR[[c(25,26)]])
+
+
+##### whole world
+#eurEnvR <- biovars_recent
+#futEnvR <- final_fut
+
+
+eurEnvM <- getValues(eurEnvR)
+futEnvM <- getValues(futEnvR)
+
+# remove missing values
+eurEnvM <- eurEnvM[complete.cases(eurEnvM), ]
+futEnvM <- futEnvM[complete.cases(futEnvM), ]
+
+# produce global environmental background data
+globalEnvM <- rbind(futEnvM, eurEnvM[, c(1:19, 25, 26)])
+
+
+######
+####### MODEL FUTURE
+
+### MESS function: from V, to P
+mess.presToFut <- MESS(V = final_recent.df[, c("bio4", "bio8", "bio13", "bio15", "silt_15.30cm", "cropland")], 
+                        P = na.omit(as.data.frame(rasterToPoints(futEnvR))[, c("bio4", "bio8", "bio13", "bio15", "silt_15.30cm", "cropland")]))
+
+mess.presToFut <- cbind(mess.presToFut, na.omit(as.data.frame(rasterToPoints(futEnvR))[, c("x", "y", c("bio4", "bio8", "bio13", "bio15", "silt_15.30cm", "cropland"))]))
+
+
+
+AUC(obs = final_recent.df[, c(1,2)], pred = rast(rasterFromXYZ(mess.presToFut[, c("x", "y", "norm")])))
+
+
+
+```
+
+
+**Which environments will be more similar?**
+
+
+
+```{r MESS future, echo=FALSE, warning=FALSE, message=FALSE}
+
+mess.presToFut$pos <- ifelse(mess.presToFut$TOTAL > 0, "positive", "negative")
+
+norm <- predict(preProcess(as.data.frame(mess.presToFut$TOTAL), method = c("range")), as.data.frame(mess.presToFut$TOTAL))
+
+mess.presToFut$norm <- as.numeric(unlist(norm))
+
+fut_mess_plot = ggplot() + 
+  geom_raster(data = na.omit(mess.presToFut)[,7:ncol(mess.presToFut)], aes(x = x, y = y, fill = norm)) + 
+  #geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                #color="black", fill=NA ) + 
+  scale_fill_gradientn(values = c(0, median(mess.presToFut$norm)/2, median(mess.presToFut$norm), (1-median(mess.presToFut$norm))/2+median(mess.presToFut$norm), 1), 
+                       colours = c(palette.colors()[7], palette.colors()[7], palette.colors()[5], palette.colors()[4], palette.colors()[4]), "") +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "bottom") 
+
+fut_mess_plot
+
+
+
+i = ggplot() + 
+    geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color=NA, fill="grey90" ) + 
+  geom_point(data = na.omit(mess.presToFut)[mess.presToFut$TOTAL > quantile(mess.presToFut[mess.presToFut$TOTAL > 0, "TOTAL"], 0.25), 7:ncol(mess.presToFut)], 
+             aes(x = x, y = y, colour = pos), alpha = 0.8, size = 0.6) + 
+
+  scale_color_manual(values = cbPalette[4]) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Future model") #+
+  geom_point(data = final_recent.df, aes(x = Longitude, y = Latitude), colour = cbPalette[3])
+
+
+
+
+
+# Define your range
+min_val <- min(mess.presToFut$TOTAL)
+max_val <- max(mess.presToFut$TOTAL)
+zero_pos <- abs(min_val) / (max_val - min_val)  # relative position of 0
+
+
+ggplot() + 
+  geom_raster(data = na.omit(mess.presToFut)[,7:ncol(mess.presToFut)], aes(x = x, y = y, fill = TOTAL)) + 
+  #geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                #color="black", fill=NA ) + 
+  scale_fill_gradientn(values = scales::rescale(c(min_val, 0, max_val)), 
+                       colours = c(palette.colors()[7], palette.colors()[5], palette.colors()[4]), "", 
+                       limits = c(min_val, max_val)) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "bottom") +
+    geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) 
+
+
+
+```
+
+
+**And which variables will drive similarity between environments?**
+
+
+```{r dissimilarity future, echo=FALSE, warning=FALSE, message=FALSE}
+
+colourCount = length(unique(mess.presToFut$MoD))
+getPalette = colorRampPalette(brewer.pal(colourCount, "Set3"))
+
+ggplot() + 
+    geom_raster(data = (mess.presToFut[, 1:13]), aes(x = x, y = y, fill = MoD)) +
+#geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                #color="black", fill=NA ) + 
+  #geom_point(data = present.occ.thin, aes(x = Longitude, y = Latitude), shape = 3) + 
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + scale_fill_manual(values = getPalette(colourCount)) #+
+  #scale_color_brewer(palette = "Set3") +
+  #ylim(30, 70) + xlim(-10, 50)
+
+```
+
+
+**Difference between projections present-in-present and present-in-future**
+
+Climate and soil data included in the model:
+
+
+```{r diff present-present vs present-future, echo=FALSE, message=FALSE, warning=FALSE}
+  
+changefut = merge(mess.presToPres[, c("x", "y", "TOTAL")], mess.presToFut[, c("x", "y", "TOTAL")], by = c("x", "y"))
+changefut$diff <- changefut$TOTAL.y - changefut$TOTAL.x
+changefut$pos <- ifelse(changefut$diff > 0, "positive", "negative")
+changefut$pos <- ifelse(changefut$TOTAL.x > 0 & changefut$TOTAL.y > 0, "Similar now, similar then", 
+                         ifelse(changefut$TOTAL.x < 0 & changefut$TOTAL.y < 0, "Dissimilar now, dissimilar then", 
+                                ifelse(changefut$TOTAL.x > 0 & changefut$TOTAL.y < 0, "Similar now, dissimilar then", 
+                                ifelse(changefut$TOTAL.x < 0 & changefut$TOTAL.y > 0, "Dissimilar now, similar then", NA))))
+
+
+ggplot() + geom_raster(data = na.omit(changefut), aes(x = x, y = y, fill = pos), alpha = 0.8) + 
+  scale_fill_manual(values = c("grey70", palette.colors()[8], palette.colors()[3], palette.colors()[4]), name = "Comparison present and future") +
+  geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color="black", fill=NA ) + 
+    #geom_point(data = past.occ.native, aes(x = Longitude, y = Latitude)) +
+  #scale_shape_manual(values = c(16,1)) +
+  #geom_point(data = final_recent.df, aes(x = Longitude, y = Latitude), colour = cbPalette[6], shape = 3) +
+  #geom_point(data = final_past.df, aes(x = Longitude, y = Latitude), colour = cbPalette[2], shape = 4) +
+  #scale_color_gradient2(low = "darkblue", high = "orangered", mid = "grey97", limits = c(-300, 100)) + 
+  #scale_color_gradient(low = "blue", high = "gold", limits = c(min(log10(mess.pastToPres$TOTAL+1000)), max(log10(mess.pastToPres$TOTAL+1000)))) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + theme(legend.position = "none")#+ xlim(-10, 50) + ylim(30,70)
+
+#Negative values (filled dots) represent locations where the present model infers lower similarity than the future model,  indicating regions where future climate will be more dissimilar. This could potentially indicate regions where blackgrass would struggle to survive. 
+#In opposition, positive values (open dots) may suggest locations where climate change may facilitate blackgrass spread/invasion because future projections have higher similarity values than present ones.
+
+print(paste("Proportion of Similar now, similar then =", round(as.numeric(nrow(changefut[changefut$pos == "Similar now, similar then",]) / nrow(changefut)), 2)))
+print(paste("Proportion of Dissimilar now, dissimilar then =", round(as.numeric(nrow(changefut[changefut$pos == "Dissimilar now, dissimilar then",]) / nrow(changefut)), 2)))
+print(paste("Proportion of Similar now, dissimilar then", round(as.numeric(nrow(changefut[changefut$pos == "Similar now, dissimilar then",]) / nrow(changefut)), 2)))
+print(paste("Proportion of Dissimilar now, similar then", round(as.numeric(nrow(changefut[changefut$pos == "Dissimilar now, similar then",]) / nrow(changefut)), 2)))
+
+
+
+
+j = ggplot() + 
+    geom_polygon(data = europe_map, aes(x=long, y=lat, group=group),
+                color=NA, fill="grey90" ) + 
+  geom_point(data = na.omit(changefut)[!(changefut$TOTAL.x > 0 & changefut$TOTAL.y > 0),], 
+             aes(x = x, y = y, colour = pos), alpha = 0.8, size = 0.6) + 
+
+  scale_color_manual(values = c("grey70", palette.colors()[3], palette.colors()[8])) +
+  xlab("Longitude") + ylab("Latitude") + theme_bw() + #xlim(-10, 50) + ylim(30,70) +
+theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Present - Future differences")
+
+
+```
